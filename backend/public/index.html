@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Smart Weighing & Camera Dashboard</title>
+  <style>
+    :root {
+      --primary: #2563eb;
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --border: #334155;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 24px;
+    }
+    main {
+      max-width: 1100px;
+      margin: auto;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    h1 { margin: 0; font-size: 24px; color: #38bdf8; }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin-bottom: 24px;
+    }
+    @media (max-width: 768px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      padding: 20px;
+      border-radius: 14px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.3);
+    }
+    .metric-title { font-size: 14px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px; }
+    .metric-value { font-size: 32px; font-weight: bold; color: #4ade80; }
+    .cam-box {
+      border-radius: 10px;
+      overflow: hidden;
+      background: #000;
+      text-align: center;
+      min-height: 240px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--border);
+    }
+    .cam-box img {
+      width: 100%;
+      height: auto;
+      max-height: 320px;
+      object-fit: contain;
+      display: block;
+    }
+    .cam-controls {
+      display: flex;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .cam-controls input {
+      flex: 1;
+      padding: 8px 12px;
+      background: #0f172a;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: #fff;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 12px;
+    }
+    th, td {
+      padding: 12px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    th { color: var(--text-muted); font-size: 14px; }
+    .thumb {
+      width: 90px;
+      height: 65px;
+      object-fit: cover;
+      border-radius: 6px;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      transition: transform 0.2s;
+    }
+    .thumb:hover { transform: scale(1.05); }
+    button {
+      padding: 10px 18px;
+      background: var(--primary);
+      color: white;
+      border: 0;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: #1d4ed8; }
+    .badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 12px;
+      font-size: 12px;
+      background: #0369a1;
+      color: #e0f2fe;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>Smart Weighing & Camera Station</h1>
+        <p style="color:var(--text-muted);margin:4px 0 0 0;">Automatic Scale Trigger & Visual Snapshot Logger</p>
+      </div>
+      <button onclick="load()">Refresh Data</button>
+    </header>
+
+    <div class="grid">
+      <!-- Live Camera Stream Box -->
+      <section class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <h2 style="margin:0; font-size:18px;">Live Camera View</h2>
+          <span class="badge" id="camStatus">Live</span>
+        </div>
+        <div class="cam-box">
+          <img id="liveFeed" src="" alt="Connecting to Camera Stream...">
+        </div>
+        <div class="cam-controls">
+          <input type="text" id="camIp" placeholder="Camera IP or Stream URL (e.g. 172.16.115.201)">
+          <button onclick="updateCamera()">Connect Feed</button>
+        </div>
+      </section>
+
+      <!-- Latest Weight Metric Box -->
+      <section class="card" style="display:flex; flex-direction:column; justify-content:space-between;">
+        <div>
+          <div class="metric-title">Latest Recorded Weight</div>
+          <div class="metric-value" id="latestWeight">-- g</div>
+          <div style="margin-top:12px; color:var(--text-muted);" id="latestTime">Waiting for data...</div>
+        </div>
+
+        <div style="border-top: 1px solid var(--border); padding-top: 16px; margin-top: 20px;">
+          <div class="metric-title">Total Records Saved</div>
+          <div style="font-size: 24px; font-weight: bold;" id="total">0</div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Measurement History Table -->
+    <section class="card">
+      <h2 style="margin:0 0 12px 0; font-size:18px;">Measurement & Snapshot History</h2>
+      <div style="overflow-x:auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Captured Photo</th>
+              <th>Weight (Grams)</th>
+              <th>Weight (Kg)</th>
+              <th>Timestamp</th>
+              <th>Record ID</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const savedIp = localStorage.getItem('cam_ip') || '172.16.115.201';
+    document.getElementById('camIp').value = savedIp;
+
+    function updateCamera() {
+      let raw = document.getElementById('camIp').value.trim();
+      if (!raw) return;
+      let url = raw.startsWith('http') ? raw : 'http://' + raw;
+      if (!url.endsWith('/stream')) {
+        url = url.replace(/\/+$/, '') + '/stream';
+      }
+      localStorage.setItem('cam_ip', raw);
+      let img = document.getElementById('liveFeed');
+      img.src = url;
+      img.onerror = () => {
+        document.getElementById('camStatus').textContent = 'Stream Offline';
+        document.getElementById('camStatus').style.background = '#e11d48';
+      };
+      img.onload = () => {
+        document.getElementById('camStatus').textContent = 'Live Connected';
+        document.getElementById('camStatus').style.background = '#10b981';
+      };
+    }
+
+    async function load() {
+      try {
+        let res = await fetch('/api/measurements');
+        let data = await res.json();
+        document.getElementById('total').textContent = data.length;
+        if (data.length > 0) {
+          let top = data[0];
+          document.getElementById('latestWeight').textContent = Number(top.weightGrams).toFixed(1) + ' g';
+          document.getElementById('latestTime').textContent = 'Last recorded: ' + new Date(top.timestamp).toLocaleString();
+        }
+
+        let tbody = document.getElementById('rows');
+        tbody.innerHTML = '';
+        if (data.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:24px;">No measurements recorded yet.</td></tr>';
+          return;
+        }
+
+        for (let item of data) {
+          let tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td><a href="${item.imageUrl}" target="_blank"><img class="thumb" src="${item.imageUrl}" alt="Snapshot"></a></td>
+            <td style="font-weight:600; color:#38bdf8;">${Number(item.weightGrams).toFixed(1)} g</td>
+            <td>${Number(item.weightKg).toFixed(3)} kg</td>
+            <td style="color:var(--text-muted);">${new Date(item.timestamp).toLocaleString()}</td>
+            <td><code>${item.measurementId}</code></td>
+          `;
+          tbody.appendChild(tr);
+        }
+      } catch (e) {
+        console.error('Failed to load measurements:', e);
+      }
+    }
+
+    // Start video feed and auto-refresh table
+    updateCamera();
+    load();
+    setInterval(load, 4000);
+  </script>
+</body>
+</html>

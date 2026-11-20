@@ -1,165 +1,314 @@
-const express = require("express"),
-  fs = require("fs"),
-  path = require("path"),
-  crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
+const express = require("express");
+const { createClient } = require("@supabase/supabase-js");
 
-// Zero-dependency .env loader
 function loadEnv() {
   const envPath = path.join(__dirname, ".env");
-  if (fs.existsSync(envPath)) {
-    const lines = fs.readFileSync(envPath, "utf8").split("\n");
-    for (const line of lines) {
-      const idx = line.indexOf("=");
-      if (idx > 0 && !line.trim().startsWith("#")) {
-        const k = line.substring(0, idx).trim();
-        const v = line.substring(idx + 1).trim();
-        process.env[k] = v;
-      }
+  if (!fs.existsSync(envPath)) return;
+
+  const content = fs.readFileSync(envPath, "utf8");
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const idx = trimmed.indexOf("=");
+    if (idx > 0) {
+      const key = trimmed.slice(0, idx).trim();
+      const val = trimmed.slice(idx + 1).trim().replace(/^["']|["']$/g, "");
+      process.env[key] = val;
     }
   }
 }
 loadEnv();
 
-const app = express(),
-  port = process.env.PORT || 3000;
-const up = path.join(__dirname, "uploads"),
-  db = path.join(__dirname, "measurements.json");
+const app = express();
+const port = parseInt(process.env.PORT, 10) || 3000;
+const uploadDir = path.join(__dirname, "uploads");
+const dbPath = path.join(__dirname, "measurements.json");
 
-fs.mkdirSync(up, { recursive: true });
-if (!fs.existsSync(db)) fs.writeFileSync(db, "[]");
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+if (!fs.existsSync(dbPath)) fs.writeFileSync(dbPath, "[]");
+
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+const supabase = (supabaseUrl && supabaseKey)
+  ? createClient(supabaseUrl, supabaseKey, { auth: { persistSession: false } })
+  : null;
 
 app.use(express.static(path.join(__dirname, "public")));
-app.use("/uploads", express.static(up));
+app.use("/uploads", express.static(uploadDir));
 
-const SUPABASE_URL = process.env.SUPABASE_URL || "https://trrhhfnvwkozouwsvrkx.supabase.co";
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
-
-// Sync record & image to Supabase Cloud Database & Storage
-async function syncToSupabase(record, imageBuffer) {
-  if (!SUPABASE_URL || !SUPABASE_KEY) return;
+function readLocalDb() {
   try {
-    let cloudImageUrl = record.imageUrl;
-
-    // 1. Upload snapshot to Supabase Storage
-    try {
-      const storageRes = await fetch(
-        `${SUPABASE_URL}/storage/v1/object/weight-images/${record.measurementId}.jpg`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${SUPABASE_KEY}`,
-            "Content-Type": "image/jpeg",
-          },
-          body: imageBuffer,
-        }
-      );
-      if (storageRes.ok) {
-        cloudImageUrl = `${SUPABASE_URL}/storage/v1/object/public/weight-images/${record.measurementId}.jpg`;
-        console.log(`[Supabase Storage] Image uploaded: ${cloudImageUrl}`);
-      }
-    } catch (e) {
-      console.warn("[Supabase Storage] Upload error:", e.message);
-    }
-
-    // 2. Insert record into Supabase PostgreSQL Table 'measurements'
-    const dbRes = await fetch(`${SUPABASE_URL}/rest/v1/measurements`, {
-      method: "POST",
-      headers: {
-        apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
-        "Content-Type": "application/json",
-        Prefer: "return=representation",
-      },
-      body: JSON.stringify({
-        id: record.measurementId,
-        weight_grams: record.weightGrams,
-        weight_kg: record.weightKg,
-        image_url: cloudImageUrl,
-        stability_status: record.stabilityStatus,
-        capture_status: record.captureStatus,
-        device_id: record.deviceId,
-      }),
-    });
-
-    if (dbRes.ok) {
-      console.log(`[Supabase Database] Successfully synced record ID: ${record.measurementId}`);
-    } else {
-      console.warn(`[Supabase Database] Insert status: ${dbRes.status} ${await dbRes.text()}`);
-    }
-  } catch (err) {
-    console.error("[Supabase] Sync failed:", err.message);
-  }
-}
-
-const read = () => {
-  try {
-    return JSON.parse(fs.readFileSync(db, "utf8"));
+    return JSON.parse(fs.readFileSync(dbPath, "utf8"));
   } catch {
     return [];
   }
-};
+}
 
-app.get("/api/health", (_q, s) =>
-  s.json({
+function writeLocalDb(data) {
+  fs.writeFileSync(dbPath, JSON.stringify(data, null, 2));
+}
+
+async function syncToSupabase(record, buffer) {
+  if (!supabase) return null;
+
+  try {
+    const filename = `${record.measurementId}.jpg`;
+    const { error: uploadError } = await supabase.storage
+      .from("weight-images")
+      .upload(filename, buffer, {
+        contentType: "image/jpeg",
+        upsert: true,
+      });
+
+    if (uploadError) {
+      console.warn("Supabase storage upload failed:", uploadError.message);
+    }
+
+    const { data: publicUrlData } = supabase.storage
+      .from("weight-images")
+      .getPublicUrl(filename);
+
+    const cloudImageUrl = publicUrlData?.publicUrl || record.imageUrl;
+
+    const { error: dbError } = await supabase.from("measurements").upsert({
+      id: record.measurementId,
+      weight_grams: record.weightGrams,
+      weight_kg: record.weightKg,
+      image_url: cloudImageUrl,
+      stability_status: record.stabilityStatus,
+      capture_status: record.captureStatus,
+      device_id: record.deviceId,
+      trigger_type: record.triggerType || "auto",
+      created_at: record.timestamp,
+    });
+
+    if (dbError) {
+      console.warn("Supabase db insert failed:", dbError.message);
+    }
+
+    return cloudImageUrl;
+  } catch (err) {
+    console.error("Supabase sync error:", err.message);
+    return null;
+  }
+}
+
+app.get("/api/health", (_req, res) => {
+  res.json({
     ok: true,
-    supabase: !!SUPABASE_KEY,
-    supabaseUrl: SUPABASE_URL,
-  })
-);
+    supabaseConfigured: Boolean(supabase),
+    supabaseUrl: supabaseUrl || null,
+    timestamp: new Date().toISOString(),
+  });
+});
 
-app.get("/api/measurements", (_q, s) =>
-  s.json(read().sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)))
-);
+const { exec } = require("child_process");
+const http = require("http");
+
+function sendSerialCommand(cmd) {
+  return new Promise((resolve, reject) => {
+    if (!fs.existsSync("/dev/ttyACM0")) {
+      return reject(new Error("Serial port /dev/ttyACM0 not present"));
+    }
+    const py = `import serial, time; s = serial.Serial('/dev/ttyACM0', 115200, timeout=1, dsrdtr=False, rtscts=False); s.write(b'${cmd}\\n'); time.sleep(0.1); s.close()`;
+    exec(`python3 -c "${py}"`, (err, stdout) => {
+      if (err) return reject(err);
+      resolve({ ok: true, stdout });
+    });
+  });
+}
+
+app.get("/api/esp-live", async (req, res) => {
+  const targetIp = (req.query.ip || "172.16.115.201").trim();
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1200);
+    const espRes = await fetch(`http://${targetIp}/health`, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (espRes.ok) {
+      const data = await espRes.json();
+      return res.json(data);
+    }
+  } catch {}
+
+  if (fs.existsSync("/dev/ttyACM0")) {
+    try {
+      const py = `import serial, time; s = serial.Serial('/dev/ttyACM0', 115200, timeout=0.5, dsrdtr=False, rtscts=False); s.write(b'h\\n'); time.sleep(0.2); out = s.read(s.in_waiting or 200).decode('utf-8', errors='ignore'); s.close(); print(out)`;
+      const { execSync } = require("child_process");
+      const out = execSync(`python3 -c "${py}"`, { timeout: 1200 }).toString();
+      const match = out.match(/Weight:\s*([-\d.]+)\s*g/i);
+      const wt = match ? parseFloat(match[1]) : 0.0;
+      return res.json({ status: "online", camera: true, scale: true, weight: wt, calibration: 420.0, method: "serial" });
+    } catch {}
+  }
+
+  res.status(504).json({ error: "Cannot reach ESP32" });
+});
+
+app.get("/api/esp-tare", async (req, res) => {
+  const targetIp = (req.query.ip || "172.16.115.201").trim();
+  if (fs.existsSync("/dev/ttyACM0")) {
+    try {
+      await sendSerialCommand("t");
+      return res.json({ ok: true, tare: true, method: "serial" });
+    } catch (e) {
+      console.warn("Serial tare failed:", e.message);
+    }
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    const espRes = await fetch(`http://${targetIp}/tare`, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!espRes.ok) return res.status(502).json({ error: "ESP32 tare failed" });
+    const data = await espRes.json();
+    res.json(data);
+  } catch (err) {
+    res.status(504).json({ error: "Cannot reach ESP32", details: err.message });
+  }
+});
+
+app.get("/api/esp-trigger", async (req, res) => {
+  const targetIp = (req.query.ip || "172.16.115.201").trim();
+  const trigType = (req.query.type || "manual").trim();
+
+  if (fs.existsSync("/dev/ttyACM0")) {
+    try {
+      await sendSerialCommand("cap");
+      return res.json({ ok: true, triggerType: trigType, method: "serial" });
+    } catch (e) {
+      console.warn("Serial trigger failed:", e.message);
+    }
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    const espRes = await fetch(`http://${targetIp}/trigger?type=${encodeURIComponent(trigType)}`, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!espRes.ok) return res.status(502).json({ error: "ESP32 trigger failed" });
+    const data = await espRes.json();
+    res.json(data);
+  } catch (err) {
+    res.status(504).json({ error: "Cannot reach ESP32", details: err.message });
+  }
+});
+
+app.get("/api/stream", (req, res) => {
+  const targetIp = (req.query.ip || "172.16.115.201").trim();
+  const proxyReq = http.get(`http://${targetIp}:81/stream`, (streamRes) => {
+    res.writeHead(streamRes.statusCode, streamRes.headers);
+    streamRes.pipe(res);
+  });
+  proxyReq.on("error", () => res.status(502).end());
+  req.on("close", () => proxyReq.destroy());
+});
+
+app.get("/api/measurements", async (_req, res) => {
+  if (supabase) {
+    const { data, error } = await supabase
+      .from("measurements")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (!error && Array.isArray(data)) {
+      const formatted = data.map((row) => ({
+        measurementId: row.id,
+        weightGrams: row.weight_grams,
+        weightKg: row.weight_kg,
+        imageUrl: row.image_url,
+        stabilityStatus: row.stability_status,
+        captureStatus: row.capture_status,
+        deviceId: row.device_id,
+        triggerType: row.trigger_type || "auto",
+        timestamp: row.created_at,
+      }));
+      return res.json(formatted);
+    }
+  }
+
+  const local = readLocalDb().sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  res.json(local);
+});
 
 app.post(
   "/api/upload-image",
-  express.raw({ type: "image/jpeg", limit: "8mb" }),
-  (req, res) => {
-    if (!Buffer.isBuffer(req.body) || req.body.length < 4)
-      return res.status(400).json({ error: "Expected JPEG body" });
+  express.raw({ type: "image/jpeg", limit: "10mb" }),
+  async (req, res) => {
+    if (!Buffer.isBuffer(req.body) || req.body.length < 16) {
+      return res.status(400).json({ error: "Valid JPEG body required" });
+    }
 
-    const id = String(
-      req.get("X-Measurement-ID") || crypto.randomUUID()
-    ).replace(/[^a-zA-Z0-9_-]/g, "_");
+    const id = (req.get("X-Measurement-ID") || crypto.randomUUID()).replace(/[^a-zA-Z0-9_-]/g, "_");
+    const weight = parseFloat(req.get("X-Weight-Grams"));
+    const deviceId = req.get("X-Device-ID") || "smart-scale-01";
+    const triggerType = req.get("X-Trigger-Type") || "auto";
 
-    const weight = Number(req.get("X-Weight-Grams"));
-    if (!Number.isFinite(weight))
-      return res.status(400).json({ error: "Invalid weight" });
+    if (!Number.isFinite(weight)) {
+      return res.status(400).json({ error: "Invalid or missing X-Weight-Grams header" });
+    }
 
-    const file = id + ".jpg";
-    fs.writeFileSync(path.join(up, file), req.body);
+    const localFile = `${id}.jpg`;
+    fs.writeFileSync(path.join(uploadDir, localFile), req.body);
 
     const record = {
       measurementId: id,
       weightGrams: weight,
-      weightKg: weight / 1000,
-      imageUrl: "/uploads/" + file,
+      weightKg: parseFloat((weight / 1000).toFixed(4)),
+      imageUrl: `/uploads/${localFile}`,
       timestamp: new Date().toISOString(),
       stabilityStatus: "stable",
       captureStatus: "saved",
-      deviceId: "smart-scale-01",
+      deviceId,
+      triggerType,
     };
 
-    const all = read(),
-      i = all.findIndex((x) => x.measurementId === id);
-    if (i >= 0) all[i] = record;
-    else all.push(record);
+    const cloudUrl = await syncToSupabase(record, req.body);
+    if (cloudUrl) {
+      record.cloudImageUrl = cloudUrl;
+    }
 
-    fs.writeFileSync(db, JSON.stringify(all, null, 2));
-
-    // Async sync to Supabase Cloud
-    syncToSupabase(record, req.body).catch((e) =>
-      console.error("[Supabase Async Error]", e)
-    );
+    const all = readLocalDb();
+    const existingIndex = all.findIndex((m) => m.measurementId === id);
+    if (existingIndex >= 0) {
+      all[existingIndex] = record;
+    } else {
+      all.unshift(record);
+    }
+    writeLocalDb(all);
 
     res.status(201).json({ ok: true, measurement: record });
   }
 );
 
+app.delete("/api/measurements/:id", async (req, res) => {
+  const { id } = req.params;
+
+  if (supabase) {
+    await supabase.from("measurements").delete().eq("id", id);
+    await supabase.storage.from("weight-images").remove([`${id}.jpg`]);
+  }
+
+  const all = readLocalDb().filter((m) => m.measurementId !== id);
+  writeLocalDb(all);
+
+  const localFile = path.join(uploadDir, `${id}.jpg`);
+  if (fs.existsSync(localFile)) {
+    try {
+      fs.unlinkSync(localFile);
+    } catch {}
+  }
+
+  res.json({ ok: true, id });
+});
+
 app.listen(port, "0.0.0.0", () => {
-  console.log(`\n=================================================`);
-  console.log(`  Smart Weighing Backend & Dashboard Ready`);
-  console.log(`  Local URL:    http://localhost:${port}`);
-  console.log(`  Supabase URL: ${SUPABASE_URL}`);
-  console.log(`=================================================\n`);
+  console.log(`Server listening on http://0.0.0.0:${port}`);
+  if (supabase) {
+    console.log(`Connected to Supabase: ${supabaseUrl}`);
+  }
 });

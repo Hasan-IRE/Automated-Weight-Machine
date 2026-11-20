@@ -1,1 +1,1 @@
-{"name":"smart-weighing-backend","version":"1.0.0","private":true,"scripts":{"start":"node server.js"},"dependencies":{"express":"^4.21.2"}}
+{"name":"smart-weighing-backend","version":"1.0.0","private":true,"scripts":{"start":"node server.js"},"dependencies":{"@supabase/supabase-js":"^2.119.2","express":"^4.21.2"}}

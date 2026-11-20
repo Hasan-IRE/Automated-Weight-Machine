@@ -32,16 +32,17 @@
       color: var(--text);
       font-family: var(--sans);
       min-height: 100vh;
-      padding: 24px;
+      padding: 16px 20px;
       line-height: 1.5;
     }
 
     .container {
-      max-width: 1240px;
-      margin: 0 auto;
+      width: 100%;
+      max-width: 100%;
+      margin: 0;
       display: flex;
       flex-direction: column;
-      gap: 20px;
+      gap: 16px;
     }
 
     header {
@@ -49,8 +50,8 @@
       justify-content: space-between;
       align-items: center;
       flex-wrap: wrap;
-      gap: 16px;
-      padding-bottom: 8px;
+      gap: 14px;
+      padding-bottom: 4px;
     }
 
     .brand {
@@ -60,33 +61,33 @@
     }
 
     .brand-icon {
-      width: 40px;
-      height: 40px;
-      border-radius: 10px;
-      background: linear-gradient(135deg, #2563eb, #38bdf8);
+      width: 38px;
+      height: 38px;
+      border-radius: 8px;
+      background: #2563eb;
       display: flex;
       align-items: center;
       justify-content: center;
       font-weight: 700;
-      font-size: 20px;
+      font-size: 18px;
       color: #fff;
     }
 
     h1 {
-      font-size: 20px;
+      font-size: 18px;
       font-weight: 700;
       letter-spacing: -0.02em;
     }
 
     .subhead {
-      font-size: 13px;
+      font-size: 12px;
       color: var(--text-muted);
     }
 
     .status-group {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
       flex-wrap: wrap;
     }
 
@@ -94,7 +95,7 @@
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 6px 12px;
+      padding: 5px 12px;
       border-radius: 20px;
       font-size: 12px;
       font-weight: 500;
@@ -110,29 +111,29 @@
       background: var(--text-muted);
     }
 
-    .pill.online .pill-dot { background: var(--success); box-shadow: 0 0 8px var(--success); }
+    .pill.online .pill-dot { background: var(--success); }
     .pill.online { color: var(--text); }
     .pill.warn .pill-dot { background: var(--warning); }
     .pill.error .pill-dot { background: var(--danger); }
 
     .grid {
       display: grid;
-      grid-template-columns: 1.4fr 1fr;
-      gap: 20px;
+      grid-template-columns: 1.3fr 1fr;
+      gap: 16px;
     }
 
-    @media (max-width: 900px) {
+    @media (max-width: 960px) {
       .grid { grid-template-columns: 1fr; }
     }
 
     .card {
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 20px;
+      border-radius: 12px;
+      padding: 18px;
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      gap: 14px;
     }
 
     .card-header {
@@ -142,7 +143,7 @@
     }
 
     .card-title {
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.05em;
@@ -151,10 +152,11 @@
 
     .cam-frame {
       background: #000;
-      border-radius: 10px;
+      border-radius: 8px;
       border: 1px solid var(--border);
       overflow: hidden;
-      aspect-ratio: 4/3;
+      aspect-ratio: 16/10;
+      max-height: 480px;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -164,7 +166,8 @@
     .cam-frame img {
       width: 100%;
       height: 100%;
-      object-fit: cover;
+      object-fit: contain;
+      background: #000;
       display: block;
     }
 
@@ -457,9 +460,11 @@
           <div class="cam-overlay" id="camOverlay">STREAM: OFF</div>
         </div>
 
-        <div class="input-row">
-          <input type="text" id="camIp" placeholder="ESP32 IP address (e.g. 172.16.115.201)">
-          <button onclick="applyCameraIp()">Connect</button>
+        <div style="display: flex; gap: 8px;">
+          <button class="secondary" style="width: 100%; justify-content: center; height: 38px;" onclick="applyCameraIp()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+            Reconnect Camera Stream
+          </button>
         </div>
       </section>
 
@@ -534,29 +539,23 @@
 
   <script>
     const defaultEspIp = '172.16.115.201';
-    let storedIp = localStorage.getItem('esp_ip') || defaultEspIp;
-    if (storedIp.includes('281')) storedIp = defaultEspIp;
-    document.getElementById('camIp').value = storedIp;
 
     function getCleanIp() {
-      let raw = document.getElementById('camIp').value.trim();
-      raw = raw.replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/:\d+$/, '');
-      const parts = raw.split('.');
-      if (parts.length === 4 && parts.some(p => parseInt(p, 10) > 255)) {
-        raw = defaultEspIp;
-        document.getElementById('camIp').value = defaultEspIp;
-      }
-      return raw || defaultEspIp;
+      return defaultEspIp;
     }
 
+    let streamFallback = 0;
     function applyCameraIp() {
       const ip = getCleanIp();
-      localStorage.setItem('esp_ip', ip);
-
       const streamImg = document.getElementById('camStream');
       const pill = document.getElementById('camStreamPill');
       const text = document.getElementById('camStreamText');
       const overlay = document.getElementById('camOverlay');
+
+      streamFallback = 0;
+      pill.className = 'pill';
+      text.textContent = 'Connecting';
+      overlay.textContent = 'CONNECTING...';
 
       streamImg.onload = () => {
         pill.className = 'pill online';
@@ -565,8 +564,11 @@
       };
 
       streamImg.onerror = () => {
-        if (!streamImg.src.includes(':80/')) {
-          streamImg.src = 'http://' + ip + ':80/stream';
+        streamFallback++;
+        if (streamFallback === 1) {
+          streamImg.src = '/api/stream?ip=' + encodeURIComponent(ip) + '&t=' + Date.now();
+        } else if (streamFallback === 2) {
+          streamImg.src = 'http://' + ip + ':80/stream?t=' + Date.now();
         } else {
           pill.className = 'pill error';
           text.textContent = 'Offline';
@@ -574,7 +576,7 @@
         }
       };
 
-      streamImg.src = 'http://' + ip + ':81/stream';
+      streamImg.src = 'http://' + ip + ':81/stream?t=' + Date.now();
     }
 
     async function checkHealth() {

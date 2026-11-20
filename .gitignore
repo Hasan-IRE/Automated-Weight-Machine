@@ -9,3 +9,4 @@ backend/.env
 create_supabase.js
 setup_db.js
 supabase_project.json
+main-esp32/secrets.h

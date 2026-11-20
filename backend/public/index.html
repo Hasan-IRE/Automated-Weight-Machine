@@ -651,10 +651,12 @@
         let res = null;
         try {
           const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 2500);
+          const timeout = setTimeout(() => controller.abort(), 1200);
           res = await fetch('http://' + ip + '/tare', { signal: controller.signal });
           clearTimeout(timeout);
-        } catch {
+        } catch {}
+
+        if (!res || !res.ok) {
           res = await fetch('/api/esp-tare?ip=' + encodeURIComponent(ip));
         }
 
@@ -685,23 +687,22 @@
         let res = null;
         try {
           const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 6000);
+          const timeout = setTimeout(() => controller.abort(), 1500);
           res = await fetch('http://' + ip + '/trigger?type=manual', { signal: controller.signal });
           clearTimeout(timeout);
-        } catch {
+        } catch {}
+
+        if (!res || !res.ok) {
           res = await fetch('/api/esp-trigger?ip=' + encodeURIComponent(ip) + '&type=manual');
         }
 
         if (res && res.ok) {
-          const d = await res.json();
-          if (d.ok) {
-            btn.textContent = 'Saved!';
-            setTimeout(loadMeasurements, 500);
-          } else {
-            alert('Upload failed from ESP32');
-          }
+          btn.textContent = 'Saved!';
+          setTimeout(loadMeasurements, 1200);
+          setTimeout(loadMeasurements, 2500);
+          setTimeout(loadMeasurements, 4500);
         } else {
-          alert('Could not trigger manual capture.');
+          alert('Could not trigger capture from ESP32.');
         }
       } catch (e) {
         alert('Failed to trigger capture: ' + e.message);
@@ -709,7 +710,7 @@
         setTimeout(() => {
           btn.disabled = false;
           btn.textContent = originalText;
-        }, 1200);
+        }, 1500);
       }
     }
 

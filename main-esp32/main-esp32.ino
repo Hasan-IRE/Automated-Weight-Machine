@@ -80,6 +80,7 @@ unsigned long lastSampleMs = 0;
 unsigned long stableSinceMs = 0;
 unsigned long lastPrintMs = 0;
 bool captureDone = false;
+volatile bool manualTriggerRequested = false;
 float currentWeight = 0;
 String systemStatus = "STARTING";
 
@@ -298,9 +299,18 @@ static esp_err_t stream_handler(httpd_req_t *req) {
     esp_camera_fb_return(fb);
 
     if (res != ESP_OK) break;
-    vTaskDelay(pdMS_TO_TICKS(40));
+    vTaskDelay(pdMS_TO_TICKS(100));
   }
   return ESP_OK;
+}
+
+static esp_err_t options_handler(httpd_req_t *req) {
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "*");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Private-Network", "true");
+  httpd_resp_set_status(req, "204 No Content");
+  return httpd_resp_send(req, NULL, 0);
 }
 
 static esp_err_t health_handler(httpd_req_t *req) {
@@ -313,6 +323,7 @@ static esp_err_t health_handler(httpd_req_t *req) {
            calibrationFactor);
 
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Private-Network", "true");
   httpd_resp_set_type(req, "application/json");
   return httpd_resp_send(req, resp, strlen(resp));
 }
@@ -329,6 +340,7 @@ static esp_err_t tare_handler(httpd_req_t *req) {
     smoothedInit = false;
   }
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Private-Network", "true");
   httpd_resp_set_type(req, "application/json");
   const char* resp = "{\"ok\":true,\"tare\":true}";
   return httpd_resp_send(req, resp, strlen(resp));
@@ -336,6 +348,7 @@ static esp_err_t tare_handler(httpd_req_t *req) {
 
 static esp_err_t calibrate_handler(httpd_req_t *req) {
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Private-Network", "true");
   char query[32];
   if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
     char val[16];
@@ -364,21 +377,13 @@ static esp_err_t calibrate_handler(httpd_req_t *req) {
 
 static esp_err_t trigger_handler(httpd_req_t *req) {
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Private-Network", "true");
   httpd_resp_set_type(req, "application/json");
 
-  char query[32];
-  const char* trigType = "manual";
-  if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
-    char val[16];
-    if (httpd_query_key_value(query, "type", val, sizeof(val)) == ESP_OK) {
-      if (strcmp(val, "auto") == 0) trigType = "auto";
-    }
-  }
-
+  manualTriggerRequested = true;
   float wt = currentWeight;
-  bool ok = uploadImage(wt, trigType);
   char resp[96];
-  snprintf(resp, sizeof(resp), "{\"ok\":%s,\"weight\":%.2f,\"triggerType\":\"%s\"}", ok ? "true" : "false", wt, trigType);
+  snprintf(resp, sizeof(resp), "{\"ok\":true,\"weight\":%.2f,\"triggerType\":\"manual\"}", wt);
   return httpd_resp_send(req, resp, strlen(resp));
 }
 
@@ -397,6 +402,7 @@ void startHttpServers() {
   config.server_port = 80;
   config.ctrl_port = 32768;
   config.max_open_sockets = 4;
+  config.stack_size = 10240;
   config.lru_purge_enable = true;
 
   httpd_uri_t indexUri     = { "/",         HTTP_GET, index_handler,     NULL };
@@ -405,6 +411,9 @@ void startHttpServers() {
   httpd_uri_t tareUri      = { "/tare",      HTTP_GET, tare_handler,      NULL };
   httpd_uri_t calibrateUri = { "/calibrate", HTTP_GET, calibrate_handler, NULL };
   httpd_uri_t triggerUri   = { "/trigger",   HTTP_GET, trigger_handler,   NULL };
+  httpd_uri_t optTrigger   = { "/trigger",   HTTP_OPTIONS, options_handler, NULL };
+  httpd_uri_t optTare      = { "/tare",      HTTP_OPTIONS, options_handler, NULL };
+  httpd_uri_t optHealth    = { "/health",    HTTP_OPTIONS, options_handler, NULL };
 
   if (httpd_start(&camera_httpd, &config) == ESP_OK) {
     httpd_register_uri_handler(camera_httpd, &indexUri);
@@ -413,6 +422,9 @@ void startHttpServers() {
     httpd_register_uri_handler(camera_httpd, &tareUri);
     httpd_register_uri_handler(camera_httpd, &calibrateUri);
     httpd_register_uri_handler(camera_httpd, &triggerUri);
+    httpd_register_uri_handler(camera_httpd, &optTrigger);
+    httpd_register_uri_handler(camera_httpd, &optTare);
+    httpd_register_uri_handler(camera_httpd, &optHealth);
     Serial.println("Control server started on port 80");
   }
 
@@ -608,6 +620,15 @@ void loop() {
       connectWiFi();
       lastCheck = millis();
     }
+  }
+
+  if (manualTriggerRequested) {
+    manualTriggerRequested = false;
+    systemStatus = "CAPTURING";
+    updateDisplay(currentWeight, systemStatus);
+    bool ok = uploadImage(currentWeight, "manual");
+    systemStatus = ok ? "SAVED" : "UPLOAD ERR";
+    updateDisplay(currentWeight, systemStatus);
   }
 
   processSerialCommands();

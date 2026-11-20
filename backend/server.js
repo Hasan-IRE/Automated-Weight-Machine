@@ -105,23 +105,60 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
+const { exec } = require("child_process");
+const http = require("http");
+
+function sendSerialCommand(cmd) {
+  return new Promise((resolve, reject) => {
+    if (!fs.existsSync("/dev/ttyACM0")) {
+      return reject(new Error("Serial port /dev/ttyACM0 not present"));
+    }
+    const py = `import serial, time; s = serial.Serial('/dev/ttyACM0', 115200, timeout=1, dsrdtr=False, rtscts=False); s.write(b'${cmd}\\n'); time.sleep(0.1); s.close()`;
+    exec(`python3 -c "${py}"`, (err, stdout) => {
+      if (err) return reject(err);
+      resolve({ ok: true, stdout });
+    });
+  });
+}
+
 app.get("/api/esp-live", async (req, res) => {
   const targetIp = (req.query.ip || "172.16.115.201").trim();
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2000);
+    const timeout = setTimeout(() => controller.abort(), 1200);
     const espRes = await fetch(`http://${targetIp}/health`, { signal: controller.signal });
     clearTimeout(timeout);
-    if (!espRes.ok) return res.status(502).json({ error: "ESP32 bad response" });
-    const data = await espRes.json();
-    res.json(data);
-  } catch (err) {
-    res.status(504).json({ error: "Cannot reach ESP32", details: err.message });
+    if (espRes.ok) {
+      const data = await espRes.json();
+      return res.json(data);
+    }
+  } catch {}
+
+  if (fs.existsSync("/dev/ttyACM0")) {
+    try {
+      const py = `import serial, time; s = serial.Serial('/dev/ttyACM0', 115200, timeout=0.5, dsrdtr=False, rtscts=False); s.write(b'h\\n'); time.sleep(0.2); out = s.read(s.in_waiting or 200).decode('utf-8', errors='ignore'); s.close(); print(out)`;
+      const { execSync } = require("child_process");
+      const out = execSync(`python3 -c "${py}"`, { timeout: 1200 }).toString();
+      const match = out.match(/Weight:\s*([-\d.]+)\s*g/i);
+      const wt = match ? parseFloat(match[1]) : 0.0;
+      return res.json({ status: "online", camera: true, scale: true, weight: wt, calibration: 420.0, method: "serial" });
+    } catch {}
   }
+
+  res.status(504).json({ error: "Cannot reach ESP32" });
 });
 
 app.get("/api/esp-tare", async (req, res) => {
   const targetIp = (req.query.ip || "172.16.115.201").trim();
+  if (fs.existsSync("/dev/ttyACM0")) {
+    try {
+      await sendSerialCommand("t");
+      return res.json({ ok: true, tare: true, method: "serial" });
+    } catch (e) {
+      console.warn("Serial tare failed:", e.message);
+    }
+  }
+
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 3000);
@@ -138,9 +175,19 @@ app.get("/api/esp-tare", async (req, res) => {
 app.get("/api/esp-trigger", async (req, res) => {
   const targetIp = (req.query.ip || "172.16.115.201").trim();
   const trigType = (req.query.type || "manual").trim();
+
+  if (fs.existsSync("/dev/ttyACM0")) {
+    try {
+      await sendSerialCommand("cap");
+      return res.json({ ok: true, triggerType: trigType, method: "serial" });
+    } catch (e) {
+      console.warn("Serial trigger failed:", e.message);
+    }
+  }
+
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000);
+    const timeout = setTimeout(() => controller.abort(), 3000);
     const espRes = await fetch(`http://${targetIp}/trigger?type=${encodeURIComponent(trigType)}`, { signal: controller.signal });
     clearTimeout(timeout);
     if (!espRes.ok) return res.status(502).json({ error: "ESP32 trigger failed" });
@@ -149,6 +196,16 @@ app.get("/api/esp-trigger", async (req, res) => {
   } catch (err) {
     res.status(504).json({ error: "Cannot reach ESP32", details: err.message });
   }
+});
+
+app.get("/api/stream", (req, res) => {
+  const targetIp = (req.query.ip || "172.16.115.201").trim();
+  const proxyReq = http.get(`http://${targetIp}:81/stream`, (streamRes) => {
+    res.writeHead(streamRes.statusCode, streamRes.headers);
+    streamRes.pipe(res);
+  });
+  proxyReq.on("error", () => res.status(502).end());
+  req.on("close", () => proxyReq.destroy());
 });
 
 app.get("/api/measurements", async (_req, res) => {

@@ -1,3 +1,8 @@
+#define SP_AP_PREFIX "SmartScale"
+#define SP_RESET_PIN 0
+#define SP_LED_PIN   255
+#include <SmartProv.h>
+
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
@@ -14,12 +19,12 @@
 #if __has_include("secrets.h")
 #include "secrets.h"
 #else
-const char* WIFI_SSID     = "YOUR_WIFI_SSID";
-const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
 const char* SUPABASE_URL  = "https://your-project.supabase.co";
 const char* SUPABASE_KEY  = "your-supabase-key";
 #endif
 String backendUrl         = "http://10.0.21.218:3000/api/upload-image";
+
+SmartProv prov;
 
 #define PWDN_GPIO_NUM     -1
 #define RESET_GPIO_NUM    -1
@@ -92,40 +97,45 @@ void updateDisplay(float grams, const String& status) {
   display.setTextSize(1);
   display.setCursor(0, 0);
   display.println("SMART SCALE");
-  display.drawLine(0, 12, 127, 12, SSD1306_WHITE);
+  display.drawLine(0, 10, 127, 10, SSD1306_WHITE);
 
   display.setTextSize(2);
-  display.setCursor(0, 22);
+  display.setCursor(0, 18);
   display.print(grams, 1);
   display.println(" g");
 
   display.setTextSize(1);
-  display.setCursor(0, 52);
+  display.setCursor(0, 38);
+  display.print("IP: ");
+  display.println(prov.isConnected() ? prov.getIP() : "Offline");
+
+  display.setCursor(0, 50);
   display.print("Status: ");
   display.println(status);
   display.display();
 }
 
-bool connectWiFi() {
-  if (WiFi.status() == WL_CONNECTED) return true;
+void showSetupScreen(const String& apName) {
+  if (!oledAvailable) return;
 
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(1);
+  display.setCursor(0, 0);
+  display.println("WIFI SETUP MODE");
+  display.drawLine(0, 10, 127, 10, SSD1306_WHITE);
 
-  unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 12000) {
-    delay(400);
-    Serial.print(".");
-  }
-  Serial.println();
+  display.setCursor(0, 14);
+  display.println("Connect to Hotspot:");
+  display.setCursor(0, 26);
+  display.println(apName);
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("WiFi connected: %s\n", WiFi.localIP().toString().c_str());
-    return true;
-  }
+  display.setCursor(0, 40);
+  display.println("IP: 192.168.4.1");
 
-  Serial.println("WiFi connection failed (timeout)");
-  return false;
+  display.setCursor(0, 52);
+  display.println("Configure in browser");
+  display.display();
 }
 
 bool initializeCamera() {
@@ -219,7 +229,7 @@ bool uploadToSupabase(const String& id, float grams, camera_fb_t* fb, const char
 }
 
 bool uploadImage(float grams, const char* triggerType = "auto") {
-  if (WiFi.status() != WL_CONNECTED && !connectWiFi()) return false;
+  if (WiFi.status() != WL_CONNECTED && !prov.isConnected()) return false;
   if (!cameraReady) return false;
 
   Serial.printf("[Upload] Capturing snapshot (%s) for %.2f g...\n", triggerType, grams);
@@ -544,7 +554,7 @@ void processSerialCommands() {
       smoothedInit = false;
       Serial.println("Tare complete. Zero point saved.");
     }
-  } else if (cmd == "r") {
+  } else if (cmd == "raw") {
     if (scaleReady) {
       Serial.printf("Raw ADC: %ld\n", scale.read());
     }
@@ -552,7 +562,7 @@ void processSerialCommands() {
     uploadImage(currentWeight, "manual");
   } else if (cmd == "h") {
     Serial.println("--- System Status ---");
-    Serial.printf("WiFi: %s (%s)\n", WiFi.status() == WL_CONNECTED ? "Connected" : "Offline", WiFi.localIP().toString().c_str());
+    Serial.printf("WiFi: %s (%s)\n", prov.isConnected() ? "Connected" : "Offline", prov.getIP().c_str());
     Serial.printf("Scale: %s, Weight: %.2f g\n", scaleReady ? "Ready" : "Offline", currentWeight);
     Serial.printf("Calibration factor: %.4f\n", calibrationFactor);
     Serial.printf("Supabase URL: %s\n", SUPABASE_URL);
@@ -608,18 +618,29 @@ void setup() {
     Serial.println("Camera init failed.");
   }
 
-  if (connectWiFi()) {
-    startHttpServers();
-  }
+  prov.onSetupMode([]() {
+    Serial.printf("[SmartProv] Setup mode active. AP: %s\n", prov.getAPName().c_str());
+    showSetupScreen(prov.getAPName());
+  });
+
+  prov.onConnected([]() {
+    Serial.printf("[SmartProv] Connected! Network: %s | IP: %s\n", prov.getSSID().c_str(), prov.getIP().c_str());
+    if (!camera_httpd) {
+      startHttpServers();
+    }
+    updateDisplay(0, "READY");
+  });
+
+  prov.enableMDNS("smartscale");
+  prov.begin(0, 255);
 }
 
 void loop() {
-  if (WiFi.status() != WL_CONNECTED) {
-    static unsigned long lastCheck = 0;
-    if (millis() - lastCheck > 10000) {
-      connectWiFi();
-      lastCheck = millis();
-    }
+  prov.update();
+
+  if (prov.isSetupMode()) {
+    delay(10);
+    return;
   }
 
   if (manualTriggerRequested) {

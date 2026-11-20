@@ -4,3 +4,8 @@ backend/uploads/*.jpg
 !backend/uploads/.gitkeep
 .vscode/
 *.bin
+.env
+backend/.env
+create_supabase.js
+setup_db.js
+supabase_project.json
